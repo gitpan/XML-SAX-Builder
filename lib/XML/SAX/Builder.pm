@@ -1,4 +1,4 @@
-# @(#) $Id: Builder.pm,v 1.1 2003/04/12 23:58:57 dom Exp $
+# @(#) $Id: Builder.pm,v 1.4 2003/04/24 12:48:43 dom Exp $
 package XML::SAX::Builder;
 
 use strict;
@@ -8,7 +8,7 @@ use Carp qw( croak );
 use XML::NamespaceSupport;
 use XML::SAX::Writer;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 our $AUTOLOAD;
 
 sub new {
@@ -29,8 +29,6 @@ sub AUTOLOAD {
     my $tag  = $AUTOLOAD;
     $tag =~ s/.*:://;
     return if $tag eq 'DESTROY';
-    croak "tag names starting with xml are forbidden"
-        if $tag =~ m/^xml/i;
     $tag = "$self->{Prefix}:$tag"
         if $self->{Prefix};
     XML::SAX::Builder::Tag->new( $self->{ Handler }, $tag, @args );
@@ -121,6 +119,31 @@ sub new {
 
 sub run { shift->(@_) }
 
+sub is_valid_name {
+    local $_ = $_[1];
+    # This is deliberately very simplistic...
+    return m/^[\w:][\w:.-]*$/;
+}
+
+sub _is_reserved_name {
+    local $_ = $_[1];
+    return m/^xml/i;
+}
+
+sub _is_valid_lang {
+    local $_ = $_[1];
+    return m/^
+    (
+      [a-zA-Z][a-zA-Z]  # ISO639Code
+      |
+      i-[a-zA-Z]+       # IanaCode
+      |
+      x-[a-zA-Z]+       # UserCode
+    )
+    (-[a-zA-Z]+)*       # Subcode
+    $/x;
+}
+
 #---------------------------------------------------------------------
 
 package XML::SAX::Builder::Tag;
@@ -131,11 +154,15 @@ use base 'XML::SAX::Builder::Base';
 sub _make_closure {
     my $class = shift;
     my ( $handler, $tag, @args ) = @_;
-    Carp::croak "doctype must only occur outside of element"
+    Carp::croak "names beginning with /xml/i are reserved"
+        if $class->_is_reserved_name( $tag );
+    Carp::croak "doctype must appear before the first element"
         if grep { ref eq 'XML::SAX::Builder::Doctype' } @args;
+    Carp::croak "invalid character in name"
+        unless $class->is_valid_name( $tag );
     return sub {
         my ($self, $nsup) = @_;
-        die "usage self->(nsup)"
+        Carp::croak "usage self->(nsup)"
             unless $self && $nsup;
         my $data = $self->_make_element_data( $nsup, $tag );
         $nsup->push_context;
@@ -184,6 +211,8 @@ sub _add_namespace_attributes {
 sub _add_attributes {
     my $self = shift;
     my ( $nsup, $data, $attr ) = @_;
+    Carp::croak "invalid LanguageID"
+        if $attr->{'xml:lang'} && !$self->_is_valid_lang( $attr->{'xml:lang'} );
     foreach ( keys %$attr ) {
         my ($uri, $prefix, $lname) = $nsup->process_attribute_name( $_ );
         $uri ||= ''; $prefix ||= ''; $lname ||= '';
@@ -208,11 +237,11 @@ sub _make_closure {
     my $class = shift;
     my ( $handler, $prefix, $uri, @args ) = @_;
     my $child = $args[0];
-    die "new(handler,prefix,uri,child)"
+    Carp::croak "new(handler,prefix,uri,child)"
         unless $handler && defined $prefix && $uri && $child;
-    die "Only one child of a namespace element is permitted"
+    Carp::croak "Only one child of a namespace element is permitted"
         if @args > 1;
-    die "Namespace child must be element or namespace: $child"
+    Carp::croak "Namespace child must be element or namespace: $child"
         unless ref($child) eq 'XML::SAX::Builder::Tag' || ref($child) eq __PACKAGE__;
     return sub {
         my ( $self, $nsup ) = @_;
@@ -236,7 +265,7 @@ use base 'XML::SAX::Builder::Base';
 
 sub _make_closure {
     my ( $class, $handler, @args ) = @_;
-    die "arguments must be character data only"
+    Carp::croak "arguments must be character data only"
         if grep { ref } @args;
     @args = grep { defined } @args;
     return sub {
@@ -256,8 +285,8 @@ use base 'XML::SAX::Builder::Base';
 
 sub _make_closure {
     my ( $class, $handler, $name, $system, $public ) = @_;
-    die "doctype: must specify name"      unless $name;
-    die "doctype: must specify system id" unless $system;
+    Carp::croak "doctype: must specify name"      unless $name;
+    Carp::croak "doctype: must specify system id" unless $system;
     return sub {
         my ( $self, $nsup ) = @_;
         my $data = {
@@ -294,8 +323,10 @@ use base 'XML::SAX::Builder::Base';
 
 sub _make_closure {
     my ( $class, $handler, $target, $data ) = @_;
-    die "usage: xmlpi(target,data)"
+    Carp::croak "usage: xmlpi(target,data)"
         unless @_ == 4;
+    Carp::croak "names beginning with /xml/i are reserved"
+        if $class->_is_reserved_name( $target );
     return sub {
         my ( $self, $nsup ) = @_;
         $handler->processing_instruction( {
@@ -335,7 +366,7 @@ XML::SAX::Builder - build XML documents using SAX
   # Produces:
   # <foo xmlns='urn:foo'>bar</foo>
 
-  my $pfx = $x->prefix( 'pfx' );
+  my $pfx = $x->xmlprefix( 'pfx' );
   $x->xml( $x->xmlns( foo => 'urn:foo', $pfx->foo( 'bar' ) ) );
 
   # Produces:
